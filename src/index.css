@@ -4,10 +4,9 @@
 
 body {
   margin: 0;
-  font-family: "Andika", sans-serif;
+  font-family: "Ysabeau Office", sans-serif;
   font-weight: 400;
   font-style: normal;
-  background: #0855b4;
-  color: #dfe3eb;
+  background: linear-gradient(to right, rgb(232, 232, 145), white);
   padding: 1rem;
 }
