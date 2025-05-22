@@ -36,7 +36,7 @@ const Register = () => {
 
         console.log("PGlite instance created");
 
-        await newDb.exec(`DROP TABLE IF EXISTS patients;`);
+        //await newDb.exec(`DROP TABLE IF EXISTS patients;`);
 
         await newDb.exec(`
           CREATE TABLE IF NOT EXISTS patients (
@@ -99,30 +99,40 @@ const Register = () => {
 
     const escapeSql = (str) => str.replace(/'/g, "''");
 
-    try {
-      await db.exec(`INSERT INTO patients (...) VALUES (...)`);
-    
-      const result = await db.exec("SELECT * FROM patients");
-    
-      if (result && result.rows && result.columns) {
-        const patients = result.rows.map((row) =>
-          Object.fromEntries(result.columns.map((col, i) => [col, row[i]]))
-        );
-        console.log("All patients:", patients);
-      }
-    
-      setMessage("Patient registered successfully!");
-      setForm({ name: "", phoneNumber: "", age: "", gender: "", dbId: "" });
-    } catch (error) {
-      console.error("Error inserting patient:", error);
-      setMessage("Something went wrong.");
+  try {
+    const insertSQL = `
+      INSERT INTO patients (name, phoneNumber, age, gender, dbId)
+      VALUES (
+  '${escapeSql(name)}',
+  '${escapeSql(phoneNumber)}',
+  ${age},
+  '${escapeSql(gender)}',
+  ${dbValue} 
+)`;
+
+    await db.exec(insertSQL);
+    console.log("Patient inserted");
+    setForm({ name: "", phoneNumber: "", age: "", gender: "", dbId: "" });
+    setMessage("Patient registered successfully!");
+
+    const result = await db.exec(`SELECT * FROM patients`);
+
+if (result && result.rows && result.columns) {
+  const patientQuery = result.rows.map((row) =>
+    Object.fromEntries(result.columns.map((col, i) => [col, row[i]]))
+  );
+  console.log("All patients:", patientQuery);
+} else {
+  console.warn("No rows returned or bad query.");
+}
+
     
 
-
-    
-    
-
-
+//console.log("All patients:", patients);
+  } catch (error) {
+    console.error("Error inserting patient:", error);
+    setMessage("Something went wrong.");
+  }
 };
     
   return (
