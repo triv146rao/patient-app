@@ -4,9 +4,10 @@
 
 body {
   margin: 0;
+  color: black;
   font-family: "Ysabeau Office", sans-serif;
   font-weight: 400;
   font-style: normal;
-  background: rgb(208, 206, 206);
+  background: rgb(242, 238, 180);
   padding: 1rem;
 }

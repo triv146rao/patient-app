@@ -1,7 +1,7 @@
 "use client";
 
-import React, { useState, useEffect } from "react";
-import { PGlite } from "@electric-sql/pglite";
+import React, { useEffect, useState } from "react";
+import { getDb, saveDb, checkDbState } from "../lib/store";
 
 const Register = () => {
   const [form, setForm] = useState({
@@ -12,182 +12,213 @@ const Register = () => {
     dbId: "",
   });
 
-  const [db, setDb] = useState(null);
-  const [dbReady, setDbReady] = useState(false);
+  const [store, setStore] = useState(null);
+  const [patients, setPatients] = useState({});
   const [message, setMessage] = useState("");
+  const [isLoading, setIsLoading] = useState(true);
 
   useEffect(() => {
-    fetch("/pglite.data")
-      .then((res) => {
-        console.log("pglite.data size (bytes):", res.headers.get("content-length"));
-      })
-      .catch((err) => {
-        console.warn("Could not fetch pglite.data:", err);
-      });
+    let unsubscribe = null;
 
-    const initializeDb = async () => {
+    const loadStore = async () => {
       try {
-        console.log("Starting PGlite DB initialization...");
+        const loadedStore = await getDb();
+        setStore(loadedStore);
 
-        const newDb = new PGlite({
-          wasmUrl: "/pglite.wasm",
-          dataUrl: "/pglite.data",
+        // Ensure patients table exists
+        if (!loadedStore.getTable("patients")) {
+          loadedStore.setTable("patients", {});
+          console.log("Initialized empty 'patients' table");
+        }
+
+        const initialPatients = loadedStore.getTable("patients") || {};
+        setPatients(initialPatients);
+        console.log("Store loaded with patients:", initialPatients);
+
+        setIsLoading(false);
+
+        unsubscribe = loadedStore.addTableListener("patients", () => {
+          const updatedPatients = loadedStore.getTable("patients") || {};
+          console.log("Patients table updated:", updatedPatients);
+          setPatients(updatedPatients);
         });
 
-        console.log("PGlite instance created");
+        // Save on pagehide (reliable for mobile/tab close)
+        window.addEventListener("pagehide", async () => {
+          await saveDb();
+          console.log("Saved on pagehide");
+        });
 
-        //await newDb.exec(`DROP TABLE IF EXISTS patients;`);
-
-        await newDb.exec(`
-          CREATE TABLE IF NOT EXISTS patients (
-            dbId INTEGER PRIMARY KEY,
-            name TEXT NOT NULL,
-            phoneNumber TEXT NOT NULL,
-            age INTEGER NOT NULL,
-            gender TEXT NOT NULL
-          );
-        `);
-
-        console.log("Table 'patients' ensured");
-
-        setDb(newDb);
-        setDbReady(true);
-
-        console.log("Database initialized and ready");
       } catch (error) {
-        console.error("Error initializing database:", error);
-        setMessage(`Failed to initialize database: ${error.message || error}`);
+        console.error("Failed to load store:", error);
+        setMessage("Failed to load database. Please refresh the page.");
+        setIsLoading(false);
       }
     };
 
-    initializeDb();
+    loadStore();
+
+    return () => {
+      if (unsubscribe && typeof unsubscribe === "function") {
+        unsubscribe();
+      }
+    };
   }, []);
 
   const handleChange = (e) => {
-    setForm({ ...form, [e.target.name]: e.target.value });
+    setForm((f) => ({ ...f, [e.target.name]: e.target.value }));
   };
 
   const handleSubmit = async (e) => {
     e.preventDefault();
 
-    if (!dbReady) {
-      alert("Database not initialized yet. Please wait.");
+    if (!store) {
+      setMessage("Store not ready yet. Please wait.");
       return;
     }
 
-    const name = form.name.trim();
-    const phoneNumber = form.phoneNumber.trim();
-    const age = Number(form.age);
-    const gender = form.gender;
-    const dbValue = Number(form.dbId);
-    if (isNaN(dbValue)) {
-      alert("Database ID must be a valid number.");
+    const { name, phoneNumber, age, gender, dbId } = form;
+    const id = dbId.trim();
+
+    if (!id || !name.trim() || !phoneNumber.trim() || !age || !gender) {
+      setMessage("Please fill all fields.");
       return;
     }
 
-    const phoneRegex = /^\d{9}$/;
-
-    if (!name || !phoneNumber || isNaN(age) || !gender || isNaN(dbValue)) {
-      alert("Please fill all fields with valid values.");
+    if (!/^\d{10}$/.test(phoneNumber)) {
+      setMessage("Phone number must be exactly 10 digits.");
       return;
     }
 
-    if (!phoneRegex.test(phoneNumber)) {
-      alert("Phone number must be exactly 9 digits.");
+    const existingPatient = store.getRow("patients", id);
+    if (existingPatient && existingPatient.name) {
+      setMessage(`A patient with ID "${id}" already exists: ${existingPatient.name}`);
       return;
     }
 
-    const escapeSql = (str) => str.replace(/'/g, "''");
+    try {
+      const patientData = {
+        name: name.trim(),
+        phoneNumber: phoneNumber.trim(),
+        age: Number(age),
+        gender,
+        createdAt: new Date().toISOString(),
+      };
 
-  try {
-    const insertSQL = `
-      INSERT INTO patients (name, phoneNumber, age, gender, dbId)
-      VALUES (
-  '${escapeSql(name)}',
-  '${escapeSql(phoneNumber)}',
-  ${age},
-  '${escapeSql(gender)}',
-  ${dbValue} 
-)`;
+      store.setRow("patients", id, patientData);
 
-    await db.exec(insertSQL);
-    console.log("Patient inserted");
-    setForm({ name: "", phoneNumber: "", age: "", gender: "", dbId: "" });
-    setMessage("Patient registered successfully!");
+      const saved = await saveDb();
+      console.log("Manual save result:", saved);
 
-    const result = await db.exec(`SELECT * FROM patients`);
+      setMessage("Patient registered successfully!");
+      setForm({ name: "", phoneNumber: "", age: "", gender: "", dbId: "" });
 
-if (result && result.rows && result.columns) {
-  const patientQuery = result.rows.map((row) =>
-    Object.fromEntries(result.columns.map((col, i) => [col, row[i]]))
-  );
-  console.log("All patients:", patientQuery);
-} else {
-  console.warn("No rows returned or bad query.");
-}
+      setTimeout(() => setMessage(""), 3000);
 
-    
+    } catch (error) {
+      console.error("Error saving patient:", error);
+      setMessage("Error registering patient. Please try again.");
+      setTimeout(() => setMessage(""), 5000);
+    }
+  };
 
-//console.log("All patients:", patients);
-  } catch (error) {
-    console.error("Error inserting patient:", error);
-    setMessage("Something went wrong.");
+  const testPersistence = async () => {
+    try {
+      setMessage("Testing persistence...");
+
+      console.log("=== PERSISTENCE TEST ===");
+      console.log("Current patients in component:", patients);
+      console.log("Current patients in store:", store?.getTable("patients"));
+
+      const saveResult = await saveDb();
+      const dbState = await checkDbState();
+
+      console.log("Force save result:", saveResult);
+      console.log("DB state after save:", dbState);
+
+      setMessage(`Persistence test complete. Save result: ${saveResult}`);
+      setTimeout(() => setMessage(""), 5000);
+    } catch (error) {
+      console.error("Persistence test failed:", error);
+      setMessage(`Persistence test failed: ${error.message}`);
+    }
+  };
+
+  const cleanupData = () => {
+    if (!store) return;
+
+    const allPatients = store.getTable("patients") || {};
+    let cleanedCount = 0;
+
+    for (const [id, patient] of Object.entries(allPatients)) {
+      if (!patient || !patient.name || typeof patient !== "object") {
+        console.log(`Removing invalid entry with ID: ${id}`, patient);
+        store.delRow("patients", id);
+        cleanedCount++;
+      }
+    }
+
+    if (cleanedCount > 0) {
+      setMessage(`Cleaned up ${cleanedCount} invalid entries`);
+    } else {
+      setMessage("No cleanup needed - all data is valid");
+    }
+
+    setTimeout(() => setMessage(""), 3000);
+  };
+
+  if (isLoading) {
+    return (
+      <div className="p-6 text-center">
+        <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-teal-600 mx-auto mb-2"></div>
+        Loading database...
+      </div>
+    );
   }
-};
-    
+
   return (
     <div className="p-6 max-w-2xl mx-auto">
       <h1 className="text-3xl font-bold text-center text-teal-700 mb-4">
         Patient Registration
       </h1>
 
-      {!dbReady && (
-        <div className="text-red-600 text-center font-medium mb-4">
-          Initializing database... Please wait or reload the page if it takes too long.
-        </div>
-      )}
-
-      <form
-        onSubmit={handleSubmit}
-        className="bg-white p-6 rounded-lg shadow-md grid gap-4"
-      >
+      <form onSubmit={handleSubmit} className="bg-white p-6 rounded-lg shadow-md grid gap-4">
         <input
           type="text"
           name="name"
           value={form.name}
           onChange={handleChange}
           placeholder="Full Name"
-          className="border p-2 rounded"
+          className="border p-2 rounded focus:outline-none focus:ring-2 focus:ring-teal-500"
           required
         />
-
         <input
           type="text"
           name="phoneNumber"
           value={form.phoneNumber}
           onChange={handleChange}
-          placeholder="Phone Number"
-          className="border p-2 rounded"
-          pattern="[0-9]{9}"
-          title="Phone number must be exactly 9 digits"
+          placeholder="Phone Number (10 digits)"
+          className="border p-2 rounded focus:outline-none focus:ring-2 focus:ring-teal-500"
+          pattern="[0-9]{10}"
+          title="Phone number must be exactly 10 digits"
           required
         />
-
         <input
           type="number"
           name="age"
           value={form.age}
           onChange={handleChange}
           placeholder="Age"
-          className="border p-2 rounded"
+          className="border p-2 rounded focus:outline-none focus:ring-2 focus:ring-teal-500"
+          min="1"
+          max="150"
           required
         />
-
         <select
           name="gender"
           value={form.gender}
           onChange={handleChange}
-          className="border p-2 rounded"
+          className="border p-2 rounded focus:outline-none focus:ring-2 focus:ring-teal-500"
           required
         >
           <option value="">Select Gender</option>
@@ -195,39 +226,97 @@ if (result && result.rows && result.columns) {
           <option value="Female">Female</option>
           <option value="Other">Other</option>
         </select>
-
         <input
           type="text"
           name="dbId"
           value={form.dbId}
           onChange={handleChange}
-          placeholder="Database ID"
-          className="border p-2 rounded"
+          placeholder="Database ID (unique)"
+          className={`border p-2 rounded focus:outline-none focus:ring-2 ${
+            form.dbId && patients[form.dbId.trim()]
+              ? "border-red-500 bg-red-50 focus:ring-red-500"
+              : "border-gray-300 focus:ring-teal-500"
+          }`}
           required
         />
-
+        {form.dbId && patients[form.dbId.trim()] && (
+          <p className="text-red-500 text-sm -mt-2">
+            ⚠️ ID "{form.dbId.trim()}" is already taken by {patients[form.dbId.trim()].name}
+          </p>
+        )}
         <button
           type="submit"
-          disabled={!dbReady}
-          className={`bg-teal-600 text-white py-2 px-4 rounded ${
-            !dbReady ? "opacity-50 cursor-not-allowed" : "hover:bg-teal-700"
+          disabled={!store || (form.dbId && patients[form.dbId.trim()])}
+          className={`bg-teal-600 text-white py-2 px-4 rounded transition-colors ${
+            !store || (form.dbId && patients[form.dbId.trim()])
+              ? "opacity-50 cursor-not-allowed"
+              : "hover:bg-teal-700"
           }`}
         >
-          Register
+          Register Patient
         </button>
-
         {message && (
-          <p
-            className={`text-center font-semibold ${
-              message.includes("successfully") ? "text-green-600" : "text-red-600"
+          <div
+            className={`text-center font-semibold p-3 rounded ${
+              message.includes("successfully") || message.includes("complete")
+                ? "text-green-600 bg-green-50"
+                : message.includes("Error") || message.includes("failed")
+                ? "text-red-600 bg-red-50"
+                : "text-blue-600 bg-blue-50"
             }`}
           >
             {message}
-          </p>
+          </div>
         )}
       </form>
+
+      <div className="flex gap-2 my-4">
+        <button
+          onClick={testPersistence}
+          className="bg-blue-500 text-white px-3 py-2 rounded hover:bg-blue-600 text-sm"
+        >
+          Test Persistence
+        </button>
+        <button
+          onClick={cleanupData}
+          className="bg-orange-500 text-white px-3 py-2 rounded hover:bg-orange-600 text-sm"
+        >
+          Clean Data
+        </button>
+      </div>
+
+      <div className="mt-6">
+        <h2 className="text-xl font-semibold mb-2">
+          Registered Patients ({Object.keys(patients).length})
+        </h2>
+
+        {Object.entries(patients).length === 0 ? (
+          <p className="text-gray-500 italic">No patients registered yet.</p>
+        ) : (
+          <div className="space-y-2 max-h-96 overflow-y-auto">
+            {Object.entries(patients)
+              .sort(([, a], [, b]) => new Date(b.createdAt || 0) - new Date(a.createdAt || 0))
+              .map(([id, patient]) => (
+                <div key={id} className="border p-3 rounded shadow-sm bg-gray-50">
+                  <div className="grid grid-cols-2 gap-2 text-sm">
+                    <p><strong>ID:</strong> {id}</p>
+                    <p><strong>Name:</strong> {patient.name}</p>
+                    <p><strong>Phone:</strong> {patient.phoneNumber}</p>
+                    <p><strong>Age:</strong> {patient.age}</p>
+                    <p><strong>Gender:</strong> {patient.gender}</p>
+                    {patient.createdAt && (
+                      <p className="text-gray-500 col-span-2">
+                        <strong>Registered:</strong> {new Date(patient.createdAt).toLocaleString()}
+                      </p>
+                    )}
+                  </div>
+                </div>
+              ))}
+          </div>
+        )}
+      </div>
     </div>
   );
 };
 
-export default Register
+export default Register;
